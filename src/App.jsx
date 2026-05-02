@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Settings, Plus, Trash2, Edit2, Copy, X, Check, ExternalLink, Info, ZoomIn, ZoomOut, GripHorizontal, RotateCcw } from 'lucide-react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { Settings, Plus, Trash2, Edit2, Copy, X, ExternalLink, Info, ZoomIn, ZoomOut, GripHorizontal, RotateCcw } from 'lucide-react';
 
 const PRESET_COLORS = [
   '#ef4444', '#f97316', '#f59e0b', '#eab308',
@@ -11,9 +11,7 @@ const INITIAL_MACROS = [
   {
     id: '1',
     title: '共鳴4層 散開・暴走',
-    x: 40, // 初期X座標
-    y: 40, // 初期Y座標
-    zIndex: 10,
+    x: 40, y: 40, zIndex: 10,
     content: `/p 【散開】　【ペア】
 /p MT ST　 MTD1　STD2
 /p D1 D2 　H1D3　H2D4
@@ -46,94 +44,46 @@ const INITIAL_RULES = [
   { id: '11', keyword: 'D', color: PRESET_COLORS[0] },
 ];
 
-export default function App() {
-  const [macros, setMacros] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ff14_macros');
-      if (saved) {
-        return JSON.parse(saved).map((m, i) => ({
-          ...m,
-          x: m.x ?? (40 + (i * 30)),
-          y: m.y ?? (40 + (i * 30)),
-          zIndex: m.zIndex ?? (10 + i)
-        }));
-      }
-      return INITIAL_MACROS;
-    } catch (e) {
-      return INITIAL_MACROS;
-    }
+// テキストハイライト用コンポーネント（変更なし）
+const HighlightedText = React.memo(({ text, highlightPattern, sortedRules }) => {
+  if (!highlightPattern) return <>{text}</>;
+  const parts = text.split(highlightPattern);
+  return parts.map((part, i) => {
+    const rule = sortedRules.find(r => r.keyword === part);
+    return rule ? <span key={i} style={{ color: rule.color, fontWeight: 800 }}>{part}</span> : part;
   });
+});
 
-  const [rules, setRules] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ff14_rules');
-      return saved ? JSON.parse(saved) : INITIAL_RULES;
-    } catch (e) {
-      return INITIAL_RULES;
-    }
-  });
+// パフォーマンス最適化のため、各カードを独立したコンポーネントに分離
+const MacroCard = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, onDelete, onEdit, onBringToFront, showToast }) => {
+  const cardRef = useRef(null);
+  const contentRef = useRef(null);
+  const [zoom, setZoom] = useState(13); // 個別のズームレベルを管理（フリーズ対策）
 
-  useEffect(() => { localStorage.setItem('ff14_macros', JSON.stringify(macros)); }, [macros]);
-  useEffect(() => { localStorage.setItem('ff14_rules', JSON.stringify(rules)); }, [rules]);
-
-  const [editingMacro, setEditingMacro] = useState(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [toast, setToast] = useState(null);
-  const [draftMacro, setDraftMacro] = useState({ title: '', content: '' });
-
-  const [newRuleKeyword, setNewRuleKeyword] = useState('');
-  const [newRuleColor, setNewRuleColor] = useState(PRESET_COLORS[7]);
-
-  const [zoomLevels, setZoomLevels] = useState({});
-  const cardContentRefs = useRef({});
-  const cardRefs = useRef({});
-  const [zIndexCounter, setZIndexCounter] = useState(100);
-
-  const handleZoomChange = (id, newSize) => {
-    setZoomLevels(prev => ({ ...prev, [id]: newSize }));
-  };
-
-  const { sortedRules, highlightPattern } = React.useMemo(() => {
-    const sorted = [...rules].sort((a, b) => b.keyword.length - a.keyword.length);
-    const patternStr = sorted.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-    const pattern = patternStr ? new RegExp(`(${patternStr})`, 'g') : null;
-    return { sortedRules: sorted, highlightPattern: pattern };
-  }, [rules]);
-
+  // Ctrl+Wheelでのズームを独立して処理
   useEffect(() => {
-    const cleanupFns = [];
-    Object.entries(cardContentRefs.current).forEach(([id, element]) => {
-      if (!element) return;
-      const handleWheel = (e) => {
-        if (e.ctrlKey) {
-          e.preventDefault();
-          const delta = e.deltaY > 0 ? -1 : 1;
-          setZoomLevels(prev => {
-            const current = prev[id] || 13;
-            return { ...prev, [id]: Math.max(10, Math.min(40, current + delta)) };
-          });
-        }
-      };
-      element.addEventListener('wheel', handleWheel, { passive: false });
-      cleanupFns.push(() => element.removeEventListener('wheel', handleWheel));
-    });
-    return () => cleanupFns.forEach(fn => fn());
-  }, [macros]);
+    const el = contentRef.current;
+    if (!el) return;
+    const handleWheel = (e) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        const delta = e.deltaY > 0 ? -1 : 1;
+        setZoom(prev => Math.max(10, Math.min(40, prev + delta)));
+      }
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, []);
 
-  const handleDragStart = (e, id) => {
+  // ドラッグ処理とはみ出し防止
+  const handleDragStart = (e) => {
     if (e.target.closest('button') || e.target.closest('input')) return;
-
-    const macro = macros.find(m => m.id === id);
-    if (!macro) return;
+    onBringToFront(macro.id);
 
     const startX = e.clientX || (e.touches && e.touches[0].clientX);
     const startY = e.clientY || (e.touches && e.touches[0].clientY);
     const initialX = macro.x || 0;
     const initialY = macro.y || 0;
-
-    const newZ = zIndexCounter + 1;
-    setZIndexCounter(newZ);
-    if (cardRefs.current[id]) cardRefs.current[id].style.zIndex = newZ;
 
     const handleMove = (moveEvent) => {
       const clientX = moveEvent.clientX || (moveEvent.touches && moveEvent.touches[0].clientX);
@@ -143,25 +93,39 @@ export default function App() {
 
       let nextX = initialX + dx;
       let nextY = initialY + dy;
-      if (nextY < 0) nextY = 0;
 
-      if (cardRefs.current[id]) {
-        cardRefs.current[id].style.left = `${nextX}px`;
-        cardRefs.current[id].style.top = `${nextY}px`;
+      // 【はみ出し防止機能】
+      const rect = cardRef.current.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width - 10; // 右端の限界（スクロールバー考慮）
+      const maxY = document.documentElement.scrollHeight - rect.height; // 下端の限界
+
+      if (nextX < 0) nextX = 0;
+      if (nextX > maxX && maxX > 0) nextX = maxX;
+      if (nextY < 0) nextY = 0;
+      if (nextY > maxY && maxY > 0) nextY = maxY;
+
+      if (cardRef.current) {
+        cardRef.current.style.left = `${nextX}px`;
+        cardRef.current.style.top = `${nextY}px`;
       }
     };
 
     const handleEnd = (upEvent) => {
       const clientX = upEvent.clientX || (upEvent.changedTouches && upEvent.changedTouches[0].clientX) || startX;
       const clientY = upEvent.clientY || (upEvent.changedTouches && upEvent.changedTouches[0].clientY) || startY;
-      const dx = clientX - startX;
-      const dy = clientY - startY;
+      let nextX = initialX + (clientX - startX);
+      let nextY = initialY + (clientY - startY);
 
-      let nextX = initialX + dx;
-      let nextY = initialY + dy;
+      const rect = cardRef.current.getBoundingClientRect();
+      const maxX = window.innerWidth - rect.width - 10;
+      const maxY = document.documentElement.scrollHeight - rect.height;
+
+      if (nextX < 0) nextX = 0;
+      if (nextX > maxX && maxX > 0) nextX = maxX;
       if (nextY < 0) nextY = 0;
+      if (nextY > maxY && maxY > 0) nextY = maxY;
 
-      setMacros(prev => prev.map(m => m.id === id ? { ...m, x: nextX, y: nextY, zIndex: newZ } : m));
+      onUpdate(macro.id, { x: nextX, y: nextY });
 
       document.removeEventListener('mousemove', handleMove);
       document.removeEventListener('mouseup', handleEnd);
@@ -175,31 +139,20 @@ export default function App() {
     document.addEventListener('touchend', handleEnd);
   };
 
-  const bringToFront = (id) => {
-    const newZ = zIndexCounter + 1;
-    setZIndexCounter(newZ);
-    setMacros(prev => prev.map(m => m.id === id ? { ...m, zIndex: newZ } : m));
+  const copyToClipboard = () => {
+    navigator.clipboard.writeText(macro.content).then(() => showToast('コピーしました'));
   };
 
-  const showToast = (message) => {
-    setToast(message);
-    setTimeout(() => setToast(null), 4000);
-  };
-
-  const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text).then(() => { showToast('コピーしました'); });
-  };
-
-  const openInPiP = async (macro) => {
+  const openInPiP = async () => {
     if (!window.documentPictureInPicture) {
-      showToast("【非対応】お使いの環境は文字のPiPに対応していません（PCのChrome/Edgeをご利用ください）");
+      showToast("【非対応】お使いの環境は文字のPiPに対応していません");
       return;
     }
     try {
       const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 400, height: 500 });
       [...document.styleSheets].forEach((styleSheet) => {
         try {
-          const cssRules = [...styleSheet.cssRules].map((rule) => rule.cssText).join('');
+          const cssRules = [...styleSheet.cssRules].map(r => r.cssText).join('');
           const style = document.createElement('style');
           style.textContent = cssRules;
           pipWindow.document.head.appendChild(style);
@@ -218,12 +171,11 @@ export default function App() {
       title.className = 'text-sm font-bold text-slate-400';
       title.innerText = macro.title;
 
-      let currentPipZoom = zoomLevels[macro.id] || 13;
       const zoomContainer = pipWindow.document.createElement('div');
       zoomContainer.className = 'flex items-center gap-2';
       zoomContainer.innerHTML = `
         <span style="font-size: 12px; color: #94a3b8;">A-</span>
-        <input type="range" min="10" max="40" value="${currentPipZoom}" class="w-20 accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer" id="pip-zoom">
+        <input type="range" min="10" max="40" value="${zoom}" class="w-20 accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer" id="pip-zoom">
         <span style="font-size: 14px; color: #94a3b8; font-weight: bold;">A+</span>
       `;
       header.appendChild(title);
@@ -233,7 +185,7 @@ export default function App() {
       contentWrapper.className = 'flex-1 overflow-auto';
       const pre = pipWindow.document.createElement('pre');
       pre.className = 'leading-snug whitespace-pre font-mono font-medium';
-      pre.style.fontSize = `${currentPipZoom}px`;
+      pre.style.fontSize = `${zoom}px`;
       pre.style.letterSpacing = '0.02em';
 
       const getHighlightedHTML = (text) => {
@@ -253,9 +205,9 @@ export default function App() {
 
       const slider = pipWindow.document.getElementById('pip-zoom');
       slider.addEventListener('input', (e) => {
-        const newSize = e.target.value;
+        const newSize = parseInt(e.target.value, 10);
         pre.style.fontSize = `${newSize}px`;
-        handleZoomChange(macro.id, parseInt(newSize, 10));
+        setZoom(newSize);
       });
       contentWrapper.addEventListener('wheel', (e) => {
         if (e.ctrlKey) {
@@ -265,25 +217,153 @@ export default function App() {
           const nextSize = Math.max(10, Math.min(40, currentSize + delta));
           pre.style.fontSize = `${nextSize}px`;
           slider.value = nextSize;
-          handleZoomChange(macro.id, nextSize);
+          setZoom(nextSize);
         }
       }, { passive: false });
     } catch (err) {
-      if (err.name === 'NotAllowedError' || (err.message && err.message.includes('top-level browsing context'))) {
-        showToast("プレビュー環境ではPiPを利用できません。デプロイ後、または独立したタブで実行してください。");
-      } else {
-        showToast("PiPウィンドウの展開に失敗しました。");
-      }
+      showToast("プレビュー環境ではPiPを利用できません。独立したタブで実行してください。");
     }
   };
 
+  return (
+    <div
+      ref={cardRef}
+      onMouseDown={() => onBringToFront(macro.id)}
+      className="absolute bg-slate-800 rounded-xl border border-slate-700 flex flex-col group resize overflow-hidden shadow-2xl transition-shadow hover:border-slate-500"
+      style={{
+        left: `${macro.x}px`,
+        top: `${macro.y}px`,
+        zIndex: macro.zIndex,
+        height: '400px',
+        minHeight: '200px',
+        minWidth: '280px',
+        width: '340px'
+      }}
+    >
+      <div
+        className="flex flex-col border-b border-slate-700 bg-slate-800 hover:bg-slate-700/50 cursor-move active:cursor-grabbing transition-colors"
+        onMouseDown={handleDragStart}
+        onTouchStart={handleDragStart}
+      >
+        <div className="flex justify-between items-center p-3 pb-2 pointer-events-none">
+          <div className="flex items-center gap-2 overflow-hidden flex-1">
+            <GripHorizontal size={16} className="text-slate-500 shrink-0" />
+            <span className="font-semibold truncate text-slate-100 select-none pointer-events-auto">{macro.title}</span>
+          </div>
+          <div className="flex gap-1 shrink-0 ml-2 pointer-events-auto">
+            <button onClick={(e) => { e.stopPropagation(); openInPiP(); }} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors" title="PiPモード">
+              <ExternalLink size={16} />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); onEdit(macro); }} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors">
+              <Edit2 size={16} />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); onDelete(macro.id); }} className="p-1.5 text-slate-400 hover:text-red-400 transition-colors">
+              <Trash2 size={16} />
+            </button>
+          </div>
+        </div>
+        <div className="px-3 pb-2 flex items-center gap-2 pointer-events-auto">
+          <ZoomOut size={14} className="text-slate-500" />
+          <input
+            type="range" min="10" max="40" value={zoom}
+            onChange={(e) => setZoom(parseInt(e.target.value, 10))}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="flex-1 accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+          />
+          <ZoomIn size={14} className="text-slate-500" />
+        </div>
+      </div>
+
+      <div
+        ref={contentRef}
+        className="p-4 relative bg-[#0f172a] flex-1 overflow-auto cursor-text"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <pre className="whitespace-pre font-mono font-medium tracking-wide" style={{ fontSize: `${zoom}px` }}>
+          <HighlightedText text={macro.content} highlightPattern={highlightPattern} sortedRules={sortedRules} />
+        </pre>
+        <button onClick={copyToClipboard} className="absolute top-2 right-2 p-2 bg-blue-600/80 rounded opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm shadow-lg">
+          <Copy size={16} />
+        </button>
+      </div>
+    </div>
+  );
+});
+
+// アプリ本体コンポーネント
+export default function App() {
+  const [macros, setMacros] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ff14_macros');
+      return saved ? JSON.parse(saved).map((m, i) => ({ ...m, x: m.x ?? (40 + (i * 30)), y: m.y ?? (40 + (i * 30)), zIndex: m.zIndex ?? (10 + i) })) : INITIAL_MACROS;
+    } catch (e) {
+      return INITIAL_MACROS;
+    }
+  });
+
+  const [rules, setRules] = useState(() => {
+    try {
+      const saved = localStorage.getItem('ff14_rules');
+      return saved ? JSON.parse(saved) : INITIAL_RULES;
+    } catch (e) {
+      return INITIAL_RULES;
+    }
+  });
+
+  const [zIndexCounter, setZIndexCounter] = useState(100);
+  const [editingMacro, setEditingMacro] = useState(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const [draftMacro, setDraftMacro] = useState({ title: '', content: '' });
+  const [newRuleKeyword, setNewRuleKeyword] = useState('');
+  const [newRuleColor, setNewRuleColor] = useState(PRESET_COLORS[7]);
+
+  // ローカルストレージ自動保存
+  useEffect(() => { localStorage.setItem('ff14_macros', JSON.stringify(macros)); }, [macros]);
+  useEffect(() => { localStorage.setItem('ff14_rules', JSON.stringify(rules)); }, [rules]);
+
+  // パターン生成を最適化
+  const { sortedRules, highlightPattern } = useMemo(() => {
+    const sorted = [...rules].sort((a, b) => b.keyword.length - a.keyword.length);
+    const patternStr = sorted.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+    return { sortedRules: sorted, highlightPattern: patternStr ? new RegExp(`(${patternStr})`, 'g') : null };
+  }, [rules]);
+
+  // 各種アクションの最適化（再レンダリング防止）
+  const showToast = useCallback((message) => {
+    setToast(message);
+    setTimeout(() => setToast(null), 4000);
+  }, []);
+
+  const updateMacro = useCallback((id, updates) => {
+    setMacros(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
+  }, []);
+
+  const deleteMacro = useCallback((id) => {
+    setMacros(prev => prev.filter(m => m.id !== id));
+  }, []);
+
+  const editMacro = useCallback((macro) => {
+    setDraftMacro(macro);
+    setEditingMacro(macro);
+  }, []);
+
+  const bringToFront = useCallback((id) => {
+    setZIndexCounter(prev => {
+      const next = prev + 1;
+      setMacros(macrosPrev => macrosPrev.map(m => m.id === id ? { ...m, zIndex: next } : m));
+      return next;
+    });
+  }, []);
+
   const handleSaveMacro = () => {
     if (editingMacro?.id) {
-      setMacros(macros.map(m => m.id === editingMacro.id ? { ...m, ...draftMacro } : m));
+      updateMacro(editingMacro.id, draftMacro);
     } else {
       const offset = macros.length * 30;
-      setMacros([...macros, { id: Date.now().toString(), x: 40 + offset, y: 40 + offset, zIndex: zIndexCounter + 1, ...draftMacro }]);
-      setZIndexCounter(zIndexCounter + 1);
+      const newZ = zIndexCounter + 1;
+      setMacros([...macros, { id: Date.now().toString(), x: 40 + offset, y: 40 + offset, zIndex: newZ, ...draftMacro }]);
+      setZIndexCounter(newZ);
     }
     setEditingMacro(null);
   };
@@ -293,15 +373,6 @@ export default function App() {
     showToast("すべての位置をリセットしました");
     setIsSettingsOpen(false);
   };
-
-  const HighlightedText = React.memo(({ text }) => {
-    if (!highlightPattern) return <>{text}</>;
-    const parts = text.split(highlightPattern);
-    return parts.map((part, i) => {
-      const rule = sortedRules.find(r => r.keyword === part);
-      return rule ? <span key={i} style={{ color: rule.color, fontWeight: 800 }}>{part}</span> : part;
-    });
-  });
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 p-6 font-sans flex flex-col relative overflow-hidden">
@@ -317,76 +388,22 @@ export default function App() {
         </div>
       </header>
 
-      {/* キャンバスエリア（フリーレイアウト領域） */}
+      {/* キャンバスエリア */}
       <main className="absolute inset-0 top-[88px] overflow-auto bg-slate-900/50 bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:20px_20px]">
         <div className="relative w-full h-[200vh] min-h-full">
-          {macros.map((macro) => {
-            const currentZoom = zoomLevels[macro.id] || 13;
-            return (
-              <div
-                key={macro.id}
-                ref={el => cardRefs.current[macro.id] = el}
-                onMouseDown={() => bringToFront(macro.id)}
-                className="absolute bg-slate-800 rounded-xl border border-slate-700 flex flex-col group resize overflow-hidden shadow-2xl transition-shadow hover:border-slate-500"
-                style={{
-                  left: `${macro.x}px`,
-                  top: `${macro.y}px`,
-                  zIndex: macro.zIndex,
-                  height: '400px',
-                  minHeight: '200px',
-                  minWidth: '280px',
-                  width: '340px'
-                }}
-              >
-                <div
-                  className="flex flex-col border-b border-slate-700 bg-slate-800 hover:bg-slate-700/50 cursor-move active:cursor-grabbing transition-colors"
-                  onMouseDown={(e) => handleDragStart(e, macro.id)}
-                  onTouchStart={(e) => handleDragStart(e, macro.id)}
-                >
-                  <div className="flex justify-between items-center p-3 pb-2 pointer-events-none">
-                    <div className="flex items-center gap-2 overflow-hidden flex-1">
-                      <GripHorizontal size={16} className="text-slate-500 shrink-0" />
-                      <span className="font-semibold truncate text-slate-100 select-none pointer-events-auto">{macro.title}</span>
-                    </div>
-                    <div className="flex gap-1 shrink-0 ml-2 pointer-events-auto">
-                      <button onClick={(e) => { e.stopPropagation(); openInPiP(macro); }} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors" title="PiPモード">
-                        <ExternalLink size={16} />
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); setDraftMacro(macro); setEditingMacro(macro); }} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors">
-                        <Edit2 size={16} />
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); setMacros(macros.filter(m => m.id !== macro.id)); }} className="p-1.5 text-slate-400 hover:text-red-400 transition-colors">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  </div>
-                  <div className="px-3 pb-2 flex items-center gap-2 pointer-events-auto">
-                    <ZoomOut size={14} className="text-slate-500" />
-                    <input
-                      type="range" min="10" max="40" value={currentZoom}
-                      onChange={(e) => handleZoomChange(macro.id, parseInt(e.target.value, 10))}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      className="flex-1 accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                    />
-                    <ZoomIn size={14} className="text-slate-500" />
-                  </div>
-                </div>
-
-                <div
-                  ref={el => cardContentRefs.current[macro.id] = el}
-                  className="p-4 relative bg-[#0f172a] flex-1 overflow-auto cursor-text"
-                  onMouseDown={(e) => e.stopPropagation()}
-                >
-                  <pre className="whitespace-pre font-mono font-medium tracking-wide" style={{ fontSize: `${currentZoom}px` }}>
-                    <HighlightedText text={macro.content} />
-                  </pre>
-                  <button onClick={() => copyToClipboard(macro.content)} className="absolute top-2 right-2 p-2 bg-blue-600/80 rounded opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm shadow-lg">
-                    <Copy size={16} />
-                  </button>
-                </div>
-              </div>
-            );
-          })}
+          {macros.map((macro) => (
+            <MacroCard
+              key={macro.id}
+              macro={macro}
+              highlightPattern={highlightPattern}
+              sortedRules={sortedRules}
+              onUpdate={updateMacro}
+              onDelete={deleteMacro}
+              onEdit={editMacro}
+              onBringToFront={bringToFront}
+              showToast={showToast}
+            />
+          ))}
         </div>
       </main>
 
