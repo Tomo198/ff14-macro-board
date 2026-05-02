@@ -1,26 +1,19 @@
 import React, { useState, useCallback, useRef, useEffect } from 'react';
-import { Settings, Plus, Trash2, Edit2, Copy, X, Check, ExternalLink, Info, ZoomIn, ZoomOut } from 'lucide-react';
+import { Settings, Plus, Trash2, Edit2, Copy, X, Check, ExternalLink, Info, ZoomIn, ZoomOut, GripHorizontal, RotateCcw } from 'lucide-react';
 
-// 12色のカラープリセットを定義（FF14のロールカラーを意識した構成）
 const PRESET_COLORS = [
-  '#ef4444', // 赤 (DPS)
-  '#f97316', // オレンジ
-  '#f59e0b', // アンバー
-  '#eab308', // 黄
-  '#22c55e', // 緑 (ヒーラー)
-  '#10b981', // エメラルド
-  '#0ea5e9', // スカイブルー
-  '#3b82f6', // 青 (タンク)
-  '#8b5cf6', // バイオレット
-  '#d946ef', // ピンク/フクシア
-  '#94a3b8', // スレート(グレー)
-  '#ffffff', // 白
+  '#ef4444', '#f97316', '#f59e0b', '#eab308',
+  '#22c55e', '#10b981', '#0ea5e9', '#3b82f6',
+  '#8b5cf6', '#d946ef', '#94a3b8', '#ffffff'
 ];
 
 const INITIAL_MACROS = [
   {
     id: '1',
     title: '共鳴4層 散開・暴走',
+    x: 40, // 初期X座標
+    y: 40, // 初期Y座標
+    zIndex: 10,
     content: `/p 【散開】　【ペア】
 /p MT ST　 MTD1　STD2
 /p D1 D2 　H1D3　H2D4
@@ -39,15 +32,14 @@ const INITIAL_MACROS = [
   }
 ];
 
-// 初期設定の色もプリセットの色コードに統一
 const INITIAL_RULES = [
-  { id: '1', keyword: 'MT', color: PRESET_COLORS[7] }, // 青
+  { id: '1', keyword: 'MT', color: PRESET_COLORS[7] },
   { id: '2', keyword: 'ST', color: PRESET_COLORS[7] },
   { id: '3', keyword: 'T', color: PRESET_COLORS[7] },
-  { id: '4', keyword: 'H1', color: PRESET_COLORS[4] }, // 緑
+  { id: '4', keyword: 'H1', color: PRESET_COLORS[4] },
   { id: '5', keyword: 'H2', color: PRESET_COLORS[4] },
   { id: '6', keyword: 'H', color: PRESET_COLORS[4] },
-  { id: '7', keyword: 'D1', color: PRESET_COLORS[0] }, // 赤
+  { id: '7', keyword: 'D1', color: PRESET_COLORS[0] },
   { id: '8', keyword: 'D2', color: PRESET_COLORS[0] },
   { id: '9', keyword: 'D3', color: PRESET_COLORS[0] },
   { id: '10', keyword: 'D4', color: PRESET_COLORS[0] },
@@ -55,11 +47,18 @@ const INITIAL_RULES = [
 ];
 
 export default function App() {
-  // 【変更点】初期化時にローカルストレージからデータを読み込む
   const [macros, setMacros] = useState(() => {
     try {
       const saved = localStorage.getItem('ff14_macros');
-      return saved ? JSON.parse(saved) : INITIAL_MACROS;
+      if (saved) {
+        return JSON.parse(saved).map((m, i) => ({
+          ...m,
+          x: m.x ?? (40 + (i * 30)),
+          y: m.y ?? (40 + (i * 30)),
+          zIndex: m.zIndex ?? (10 + i)
+        }));
+      }
+      return INITIAL_MACROS;
     } catch (e) {
       return INITIAL_MACROS;
     }
@@ -74,27 +73,21 @@ export default function App() {
     }
   });
 
-  // 【変更点】マクロが変更されたらローカルストレージに保存
-  useEffect(() => {
-    localStorage.setItem('ff14_macros', JSON.stringify(macros));
-  }, [macros]);
-
-  // 【変更点】ルールが変更されたらローカルストレージに保存
-  useEffect(() => {
-    localStorage.setItem('ff14_rules', JSON.stringify(rules));
-  }, [rules]);
+  useEffect(() => { localStorage.setItem('ff14_macros', JSON.stringify(macros)); }, [macros]);
+  useEffect(() => { localStorage.setItem('ff14_rules', JSON.stringify(rules)); }, [rules]);
 
   const [editingMacro, setEditingMacro] = useState(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [draftMacro, setDraftMacro] = useState({ title: '', content: '' });
 
-  // 新規ルール用のステート。初期選択色を青に設定。
   const [newRuleKeyword, setNewRuleKeyword] = useState('');
   const [newRuleColor, setNewRuleColor] = useState(PRESET_COLORS[7]);
 
   const [zoomLevels, setZoomLevels] = useState({});
   const cardContentRefs = useRef({});
+  const cardRefs = useRef({});
+  const [zIndexCounter, setZIndexCounter] = useState(100);
 
   const handleZoomChange = (id, newSize) => {
     setZoomLevels(prev => ({ ...prev, [id]: newSize }));
@@ -109,30 +102,84 @@ export default function App() {
 
   useEffect(() => {
     const cleanupFns = [];
-
     Object.entries(cardContentRefs.current).forEach(([id, element]) => {
       if (!element) return;
-
       const handleWheel = (e) => {
         if (e.ctrlKey) {
           e.preventDefault();
           const delta = e.deltaY > 0 ? -1 : 1;
           setZoomLevels(prev => {
             const current = prev[id] || 13;
-            const next = Math.max(10, Math.min(40, current + delta));
-            return { ...prev, [id]: next };
+            return { ...prev, [id]: Math.max(10, Math.min(40, current + delta)) };
           });
         }
       };
-
       element.addEventListener('wheel', handleWheel, { passive: false });
       cleanupFns.push(() => element.removeEventListener('wheel', handleWheel));
     });
-
-    return () => {
-      cleanupFns.forEach(fn => fn());
-    };
+    return () => cleanupFns.forEach(fn => fn());
   }, [macros]);
+
+  const handleDragStart = (e, id) => {
+    if (e.target.closest('button') || e.target.closest('input')) return;
+
+    const macro = macros.find(m => m.id === id);
+    if (!macro) return;
+
+    const startX = e.clientX || (e.touches && e.touches[0].clientX);
+    const startY = e.clientY || (e.touches && e.touches[0].clientY);
+    const initialX = macro.x || 0;
+    const initialY = macro.y || 0;
+
+    const newZ = zIndexCounter + 1;
+    setZIndexCounter(newZ);
+    if (cardRefs.current[id]) cardRefs.current[id].style.zIndex = newZ;
+
+    const handleMove = (moveEvent) => {
+      const clientX = moveEvent.clientX || (moveEvent.touches && moveEvent.touches[0].clientX);
+      const clientY = moveEvent.clientY || (moveEvent.touches && moveEvent.touches[0].clientY);
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+
+      let nextX = initialX + dx;
+      let nextY = initialY + dy;
+      if (nextY < 0) nextY = 0;
+
+      if (cardRefs.current[id]) {
+        cardRefs.current[id].style.left = `${nextX}px`;
+        cardRefs.current[id].style.top = `${nextY}px`;
+      }
+    };
+
+    const handleEnd = (upEvent) => {
+      const clientX = upEvent.clientX || (upEvent.changedTouches && upEvent.changedTouches[0].clientX) || startX;
+      const clientY = upEvent.clientY || (upEvent.changedTouches && upEvent.changedTouches[0].clientY) || startY;
+      const dx = clientX - startX;
+      const dy = clientY - startY;
+
+      let nextX = initialX + dx;
+      let nextY = initialY + dy;
+      if (nextY < 0) nextY = 0;
+
+      setMacros(prev => prev.map(m => m.id === id ? { ...m, x: nextX, y: nextY, zIndex: newZ } : m));
+
+      document.removeEventListener('mousemove', handleMove);
+      document.removeEventListener('mouseup', handleEnd);
+      document.removeEventListener('touchmove', handleMove);
+      document.removeEventListener('touchend', handleEnd);
+    };
+
+    document.addEventListener('mousemove', handleMove);
+    document.addEventListener('mouseup', handleEnd);
+    document.addEventListener('touchmove', handleMove, { passive: false });
+    document.addEventListener('touchend', handleEnd);
+  };
+
+  const bringToFront = (id) => {
+    const newZ = zIndexCounter + 1;
+    setZIndexCounter(newZ);
+    setMacros(prev => prev.map(m => m.id === id ? { ...m, zIndex: newZ } : m));
+  };
 
   const showToast = (message) => {
     setToast(message);
@@ -140,9 +187,7 @@ export default function App() {
   };
 
   const copyToClipboard = (text) => {
-    navigator.clipboard.writeText(text).then(() => {
-      showToast('コピーしました');
-    });
+    navigator.clipboard.writeText(text).then(() => { showToast('コピーしました'); });
   };
 
   const openInPiP = async (macro) => {
@@ -150,13 +195,8 @@ export default function App() {
       showToast("【非対応】お使いの環境は文字のPiPに対応していません（PCのChrome/Edgeをご利用ください）");
       return;
     }
-
     try {
-      const pipWindow = await window.documentPictureInPicture.requestWindow({
-        width: 400,
-        height: 500,
-      });
-
+      const pipWindow = await window.documentPictureInPicture.requestWindow({ width: 400, height: 500 });
       [...document.styleSheets].forEach((styleSheet) => {
         try {
           const cssRules = [...styleSheet.cssRules].map((rule) => rule.cssText).join('');
@@ -170,13 +210,10 @@ export default function App() {
           pipWindow.document.head.appendChild(link);
         }
       });
-
       const container = pipWindow.document.createElement('div');
       container.className = 'bg-slate-900 min-h-screen p-4 text-white flex flex-col';
-
       const header = pipWindow.document.createElement('div');
       header.className = 'flex justify-between items-center border-b border-slate-700 pb-2 mb-2';
-
       const title = pipWindow.document.createElement('div');
       title.className = 'text-sm font-bold text-slate-400';
       title.innerText = macro.title;
@@ -189,13 +226,11 @@ export default function App() {
         <input type="range" min="10" max="40" value="${currentPipZoom}" class="w-20 accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer" id="pip-zoom">
         <span style="font-size: 14px; color: #94a3b8; font-weight: bold;">A+</span>
       `;
-
       header.appendChild(title);
       header.appendChild(zoomContainer);
 
       const contentWrapper = pipWindow.document.createElement('div');
       contentWrapper.className = 'flex-1 overflow-auto';
-
       const pre = pipWindow.document.createElement('pre');
       pre.className = 'leading-snug whitespace-pre font-mono font-medium';
       pre.style.fontSize = `${currentPipZoom}px`;
@@ -211,7 +246,6 @@ export default function App() {
       };
 
       pre.innerHTML = getHighlightedHTML(macro.content);
-
       contentWrapper.appendChild(pre);
       container.appendChild(header);
       container.appendChild(contentWrapper);
@@ -223,7 +257,6 @@ export default function App() {
         pre.style.fontSize = `${newSize}px`;
         handleZoomChange(macro.id, parseInt(newSize, 10));
       });
-
       contentWrapper.addEventListener('wheel', (e) => {
         if (e.ctrlKey) {
           e.preventDefault();
@@ -235,9 +268,7 @@ export default function App() {
           handleZoomChange(macro.id, nextSize);
         }
       }, { passive: false });
-
     } catch (err) {
-      console.error("PiPエラー:", err);
       if (err.name === 'NotAllowedError' || (err.message && err.message.includes('top-level browsing context'))) {
         showToast("プレビュー環境ではPiPを利用できません。デプロイ後、または独立したタブで実行してください。");
       } else {
@@ -250,9 +281,17 @@ export default function App() {
     if (editingMacro?.id) {
       setMacros(macros.map(m => m.id === editingMacro.id ? { ...m, ...draftMacro } : m));
     } else {
-      setMacros([...macros, { id: Date.now().toString(), ...draftMacro }]);
+      const offset = macros.length * 30;
+      setMacros([...macros, { id: Date.now().toString(), x: 40 + offset, y: 40 + offset, zIndex: zIndexCounter + 1, ...draftMacro }]);
+      setZIndexCounter(zIndexCounter + 1);
     }
     setEditingMacro(null);
+  };
+
+  const resetPositions = () => {
+    setMacros(macros.map((m, i) => ({ ...m, x: 40 + (i * 30), y: 40 + (i * 30), zIndex: 10 + i })));
+    showToast("すべての位置をリセットしました");
+    setIsSettingsOpen(false);
   };
 
   const HighlightedText = React.memo(({ text }) => {
@@ -265,82 +304,95 @@ export default function App() {
   });
 
   return (
-    <div className="min-h-screen bg-slate-900 text-slate-200 p-6 font-sans">
-      <header className="max-w-6xl mx-auto flex justify-between items-center mb-8">
+    <div className="min-h-screen bg-slate-900 text-slate-200 p-6 font-sans flex flex-col relative overflow-hidden">
+      <header className="max-w-6xl mx-auto w-full flex justify-between items-center mb-6 relative z-[1000]">
         <h1 className="text-2xl font-bold text-white">FF14 マクロボード</h1>
         <div className="flex gap-2">
-          <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 border border-slate-700 transition-colors">
+          <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 border border-slate-700 transition-colors shadow-lg">
             <Settings size={20} />
           </button>
-          <button onClick={() => { setDraftMacro({ title: '', content: '' }); setEditingMacro({}); }} className="px-4 py-2 bg-blue-600 rounded-lg hover:bg-blue-700 font-bold flex items-center gap-1 transition-colors">
+          <button onClick={() => { setDraftMacro({ title: '', content: '' }); setEditingMacro({}); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold flex items-center gap-1 transition-colors shadow-lg shadow-blue-900/50">
             <Plus size={18} /> 新規マクロ
           </button>
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
-        {macros.map((macro) => {
-          const currentZoom = zoomLevels[macro.id] || 13;
-          return (
-            <div
-              key={macro.id}
-              className="bg-slate-800 rounded-xl border border-slate-700 flex flex-col group resize overflow-hidden shadow-lg"
-              style={{ height: '400px', minHeight: '200px', minWidth: '280px' }}
-            >
-              <div className="flex flex-col border-b border-slate-700 bg-slate-800/50">
-                <div className="flex justify-between items-center p-3 pb-2">
-                  <span className="font-semibold truncate">{macro.title}</span>
-                  <div className="flex gap-1 shrink-0">
-                    <button onClick={() => openInPiP(macro)} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors" title="PiPモード（最前面）">
-                      <ExternalLink size={16} />
-                    </button>
-                    <button onClick={() => { setDraftMacro(macro); setEditingMacro(macro); }} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors">
-                      <Edit2 size={16} />
-                    </button>
-                    <button onClick={() => setMacros(macros.filter(m => m.id !== macro.id))} className="p-1.5 text-slate-400 hover:text-red-400 transition-colors">
-                      <Trash2 size={16} />
-                    </button>
+      {/* キャンバスエリア（フリーレイアウト領域） */}
+      <main className="absolute inset-0 top-[88px] overflow-auto bg-slate-900/50 bg-[radial-gradient(#334155_1px,transparent_1px)] [background-size:20px_20px]">
+        <div className="relative w-full h-[200vh] min-h-full">
+          {macros.map((macro) => {
+            const currentZoom = zoomLevels[macro.id] || 13;
+            return (
+              <div
+                key={macro.id}
+                ref={el => cardRefs.current[macro.id] = el}
+                onMouseDown={() => bringToFront(macro.id)}
+                className="absolute bg-slate-800 rounded-xl border border-slate-700 flex flex-col group resize overflow-hidden shadow-2xl transition-shadow hover:border-slate-500"
+                style={{
+                  left: `${macro.x}px`,
+                  top: `${macro.y}px`,
+                  zIndex: macro.zIndex,
+                  height: '400px',
+                  minHeight: '200px',
+                  minWidth: '280px',
+                  width: '340px'
+                }}
+              >
+                <div
+                  className="flex flex-col border-b border-slate-700 bg-slate-800 hover:bg-slate-700/50 cursor-move active:cursor-grabbing transition-colors"
+                  onMouseDown={(e) => handleDragStart(e, macro.id)}
+                  onTouchStart={(e) => handleDragStart(e, macro.id)}
+                >
+                  <div className="flex justify-between items-center p-3 pb-2 pointer-events-none">
+                    <div className="flex items-center gap-2 overflow-hidden flex-1">
+                      <GripHorizontal size={16} className="text-slate-500 shrink-0" />
+                      <span className="font-semibold truncate text-slate-100 select-none pointer-events-auto">{macro.title}</span>
+                    </div>
+                    <div className="flex gap-1 shrink-0 ml-2 pointer-events-auto">
+                      <button onClick={(e) => { e.stopPropagation(); openInPiP(macro); }} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors" title="PiPモード">
+                        <ExternalLink size={16} />
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); setDraftMacro(macro); setEditingMacro(macro); }} className="p-1.5 text-slate-400 hover:text-blue-400 transition-colors">
+                        <Edit2 size={16} />
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); setMacros(macros.filter(m => m.id !== macro.id)); }} className="p-1.5 text-slate-400 hover:text-red-400 transition-colors">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="px-3 pb-2 flex items-center gap-2 pointer-events-auto">
+                    <ZoomOut size={14} className="text-slate-500" />
+                    <input
+                      type="range" min="10" max="40" value={currentZoom}
+                      onChange={(e) => handleZoomChange(macro.id, parseInt(e.target.value, 10))}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      className="flex-1 accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
+                    />
+                    <ZoomIn size={14} className="text-slate-500" />
                   </div>
                 </div>
-                <div className="px-3 pb-2 flex items-center gap-2">
-                  <ZoomOut size={14} className="text-slate-500" />
-                  <input
-                    type="range"
-                    min="10"
-                    max="40"
-                    value={currentZoom}
-                    onChange={(e) => handleZoomChange(macro.id, parseInt(e.target.value, 10))}
-                    className="flex-1 accent-blue-500 h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer"
-                  />
-                  <ZoomIn size={14} className="text-slate-500" />
-                  <span className="text-[10px] text-slate-400 hidden xl:block whitespace-nowrap cursor-help" title="枠の右下をドラッグでサイズ変更、Ctrl+マウスホイールで文字の拡大縮小ができます">
-                    (Ctrl+ホイールで文字ズーム / 右下ドラッグで枠リサイズ)
-                  </span>
+
+                <div
+                  ref={el => cardContentRefs.current[macro.id] = el}
+                  className="p-4 relative bg-[#0f172a] flex-1 overflow-auto cursor-text"
+                  onMouseDown={(e) => e.stopPropagation()}
+                >
+                  <pre className="whitespace-pre font-mono font-medium tracking-wide" style={{ fontSize: `${currentZoom}px` }}>
+                    <HighlightedText text={macro.content} />
+                  </pre>
+                  <button onClick={() => copyToClipboard(macro.content)} className="absolute top-2 right-2 p-2 bg-blue-600/80 rounded opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm shadow-lg">
+                    <Copy size={16} />
+                  </button>
                 </div>
               </div>
-
-              <div
-                ref={el => cardContentRefs.current[macro.id] = el}
-                className="p-4 relative bg-[#0f172a] flex-1 overflow-auto"
-              >
-                <pre
-                  className="whitespace-pre font-mono font-medium tracking-wide"
-                  style={{ fontSize: `${currentZoom}px` }}
-                >
-                  <HighlightedText text={macro.content} />
-                </pre>
-                <button onClick={() => copyToClipboard(macro.content)} className="absolute top-2 right-2 p-2 bg-blue-600/80 rounded opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm">
-                  <Copy size={16} />
-                </button>
-              </div>
-            </div>
-          );
-        })}
+            );
+          })}
+        </div>
       </main>
 
       {/* 編集モーダル */}
       {editingMacro && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[9999]">
           <div className="bg-slate-800 rounded-xl w-full max-w-2xl border border-slate-700 shadow-2xl">
             <div className="p-4 border-b border-slate-700 flex justify-between items-center">
               <h2 className="font-bold text-lg">マクロ編集</h2>
@@ -349,15 +401,11 @@ export default function App() {
             <div className="p-4 space-y-4">
               <input
                 className="w-full bg-slate-900 p-2 rounded-lg border border-slate-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none text-white"
-                value={draftMacro.title}
-                onChange={e => setDraftMacro({ ...draftMacro, title: e.target.value })}
-                placeholder="タイトル"
+                value={draftMacro.title} onChange={e => setDraftMacro({ ...draftMacro, title: e.target.value })} placeholder="タイトル"
               />
               <textarea
                 className="w-full bg-slate-900 p-3 rounded-lg border border-slate-700 h-64 font-mono text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none text-white resize-none"
-                value={draftMacro.content}
-                onChange={e => setDraftMacro({ ...draftMacro, content: e.target.value })}
-                placeholder="/p マクロ内容"
+                value={draftMacro.content} onChange={e => setDraftMacro({ ...draftMacro, content: e.target.value })} placeholder="/p マクロ内容"
               />
               <button onClick={handleSaveMacro} className="w-full py-3 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold transition-colors">保存</button>
             </div>
@@ -367,11 +415,19 @@ export default function App() {
 
       {/* 設定モーダル */}
       {isSettingsOpen && (
-        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-50">
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center p-4 z-[9999]">
           <div className="bg-slate-800 rounded-xl w-full max-w-md border border-slate-700 p-4 max-h-[90vh] overflow-y-auto shadow-2xl">
             <div className="flex justify-between mb-4 sticky top-0 bg-slate-800 pb-2 z-10 border-b border-slate-700">
               <h2 className="font-bold text-lg">設定・ガイド</h2>
               <button onClick={() => setIsSettingsOpen(false)} className="text-slate-400 hover:text-red-400 transition-colors"><X /></button>
+            </div>
+
+            <div className="mb-6 pb-6 border-b border-slate-700">
+              <h3 className="text-sm font-semibold text-slate-400 mb-2">ウィンドウ管理</h3>
+              <button onClick={resetPositions} className="w-full py-2 bg-slate-700 hover:bg-slate-600 rounded-lg flex items-center justify-center gap-2 text-sm transition-colors border border-slate-600">
+                <RotateCcw size={16} /> 枠の位置をすべて初期位置に戻す
+              </button>
+              <p className="text-xs text-slate-500 mt-2">※画面外に枠が消えてしまった場合にご利用ください。</p>
             </div>
 
             <div className="mb-6">
@@ -392,9 +448,7 @@ export default function App() {
                 <div className="flex gap-2">
                   <input
                     className="flex-1 bg-slate-800 p-2 rounded border border-slate-600 text-sm focus:border-blue-500 outline-none text-white"
-                    placeholder="追加する文字 (例: MT)"
-                    value={newRuleKeyword}
-                    onChange={e => setNewRuleKeyword(e.target.value)}
+                    placeholder="追加する文字 (例: MT)" value={newRuleKeyword} onChange={e => setNewRuleKeyword(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && newRuleKeyword && (setRules([...rules, { id: Date.now().toString(), keyword: newRuleKeyword, color: newRuleColor }]), setNewRuleKeyword(''))}
                   />
                   <button
@@ -408,15 +462,9 @@ export default function App() {
                 <div className="flex flex-wrap gap-2 pt-1">
                   {PRESET_COLORS.map(color => (
                     <button
-                      key={color}
-                      onClick={() => setNewRuleColor(color)}
-                      className={`w-6 h-6 rounded-full border-2 transition-all duration-200 cursor-pointer
-                        ${newRuleColor === color
-                          ? 'border-white scale-125 shadow-md shadow-white/20'
-                          : 'border-transparent hover:scale-110'}`}
-                      style={{ backgroundColor: color }}
-                      title="この色を選択"
-                      aria-label={`${color}を選択`}
+                      key={color} onClick={() => setNewRuleColor(color)}
+                      className={`w-6 h-6 rounded-full border-2 transition-all duration-200 cursor-pointer ${newRuleColor === color ? 'border-white scale-125 shadow-md shadow-white/20' : 'border-transparent hover:scale-110'}`}
+                      style={{ backgroundColor: color }} title="この色を選択" aria-label={`${color}を選択`}
                     />
                   ))}
                 </div>
@@ -430,17 +478,16 @@ export default function App() {
               </h3>
               <ul className="text-sm text-slate-300 space-y-3 list-disc list-inside">
                 <li className="leading-relaxed">
-                  <strong className="text-white">ボード枠のサイズ変更：</strong>
-                  <br />各マクロカードの<strong className="text-blue-400">右下端（斜線部分）をドラッグ</strong>することで、縦・横・斜めにカード自体を自由に拡大・縮小できます。
+                  <strong className="text-white">ボードの移動と拡大：</strong>
+                  <br />タイトル部分をドラッグすると自由に移動できます。枠の右下端をドラッグするとサイズを変更できます。
                 </li>
                 <li className="leading-relaxed">
                   <strong className="text-white">文字のズーム：</strong>
-                  <br />マクロ上で<strong className="text-blue-400">Ctrlキー ＋ マウスホイール</strong>を上下にスクロールすると、文字だけを素早く拡大・縮小できます（スライダーでの操作も可能です）。
+                  <br />マクロ上で<strong className="text-blue-400">Ctrlキー ＋ マウスホイール</strong>を上下にスクロールすると文字を拡大・縮小できます。
                 </li>
-                {/* 【変更点】注意書きを自動保存に関する内容にアップデート */}
                 <li className="leading-relaxed">
                   <strong className="text-green-400">自動保存機能：</strong>
-                  <br />追加したマクロや色設定は、お使いのブラウザに自動で保存されます。次回開いたときもそのまま続きから利用できます。<span className="text-yellow-400">※PCとスマホなど、別の端末間でデータを共有することはできません。</span>
+                  <br />データや配置はブラウザに自動で保存されます。
                 </li>
               </ul>
             </div>
@@ -448,7 +495,7 @@ export default function App() {
         </div>
       )}
 
-      {toast && <div className="fixed bottom-4 right-4 bg-blue-600 px-4 py-3 rounded-lg shadow-2xl z-50 animate-fade-in flex items-center gap-2 font-bold">{toast}</div>}
+      {toast && <div className="fixed bottom-4 right-4 bg-blue-600 px-4 py-3 rounded-lg shadow-2xl z-[9999] animate-fade-in flex items-center gap-2 font-bold">{toast}</div>}
     </div>
   );
 }
