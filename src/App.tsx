@@ -1,13 +1,16 @@
+/* eslint-disable no-irregular-whitespace */
 import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { Settings, Plus, Trash2, Edit2, Copy, X, ExternalLink, Info, ZoomIn, ZoomOut, GripHorizontal, RotateCcw } from 'lucide-react';
+import { Macro, HighlightRule, DraftMacro } from './types/macro';
+import { loadStoredData, saveStoredData } from './utils/storage';
 
-const PRESET_COLORS = [
+const PRESET_COLORS: string[] = [
   '#ef4444', '#f97316', '#f59e0b', '#eab308',
   '#22c55e', '#10b981', '#0ea5e9', '#3b82f6',
   '#8b5cf6', '#d946ef', '#94a3b8', '#ffffff'
 ];
 
-const INITIAL_MACROS = [
+const INITIAL_MACROS: Macro[] = [
   {
     id: '1',
     title: '共鳴4層 散開・暴走',
@@ -30,7 +33,7 @@ const INITIAL_MACROS = [
   }
 ];
 
-const INITIAL_RULES = [
+const INITIAL_RULES: HighlightRule[] = [
   { id: '1', keyword: 'MT', color: PRESET_COLORS[7] },
   { id: '2', keyword: 'ST', color: PRESET_COLORS[7] },
   { id: '3', keyword: 'T', color: PRESET_COLORS[7] },
@@ -44,27 +47,46 @@ const INITIAL_RULES = [
   { id: '11', keyword: 'D', color: PRESET_COLORS[0] },
 ];
 
-// テキストハイライト用コンポーネント（変更なし）
-const HighlightedText = React.memo(({ text, highlightPattern, sortedRules }) => {
+interface HighlightedTextProps {
+  text: string;
+  highlightPattern: RegExp | null;
+  sortedRules: HighlightRule[];
+}
+
+const HighlightedText: React.FC<HighlightedTextProps> = React.memo(({ text, highlightPattern, sortedRules }) => {
   if (!highlightPattern) return <>{text}</>;
   const parts = text.split(highlightPattern);
-  return parts.map((part, i) => {
-    const rule = sortedRules.find(r => r.keyword === part);
-    return rule ? <span key={i} style={{ color: rule.color, fontWeight: 800 }}>{part}</span> : part;
-  });
+  return (
+    <>
+      {parts.map((part, i) => {
+        const rule = sortedRules.find(r => r.keyword === part);
+        return rule ? <span key={i} style={{ color: rule.color, fontWeight: 800 }}>{part}</span> : part;
+      })}
+    </>
+  );
 });
+HighlightedText.displayName = 'HighlightedText';
 
-// パフォーマンス最適化のため、各カードを独立したコンポーネントに分離
-const MacroCard = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, onDelete, onEdit, onBringToFront, showToast }) => {
-  const cardRef = useRef(null);
-  const contentRef = useRef(null);
-  const [zoom, setZoom] = useState(13); // 個別のズームレベルを管理（フリーズ対策）
+interface MacroCardProps {
+  macro: Macro;
+  highlightPattern: RegExp | null;
+  sortedRules: HighlightRule[];
+  onUpdate: (id: string, updates: Partial<Macro>) => void;
+  onDelete: (id: string) => void;
+  onEdit: (macro: Macro) => void;
+  onBringToFront: (id: string) => void;
+  showToast: (message: string) => void;
+}
 
-  // Ctrl+Wheelでのズームを独立して処理
+const MacroCard: React.FC<MacroCardProps> = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, onDelete, onEdit, onBringToFront, showToast }) => {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [zoom, setZoom] = useState<number>(13);
+
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    const handleWheel = (e) => {
+    const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey) {
         e.preventDefault();
         const delta = e.deltaY > 0 ? -1 : 1;
@@ -75,55 +97,58 @@ const MacroCard = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, 
     return () => el.removeEventListener('wheel', handleWheel);
   }, []);
 
-  // ドラッグ処理とはみ出し防止
-  const handleDragStart = (e) => {
-    if (e.target.closest('button') || e.target.closest('input')) return;
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest('button') || target?.closest('input')) return;
     onBringToFront(macro.id);
 
-    const startX = e.clientX || (e.touches && e.touches[0].clientX);
-    const startY = e.clientY || (e.touches && e.touches[0].clientY);
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    const startX = clientX;
+    const startY = clientY;
     const initialX = macro.x || 0;
     const initialY = macro.y || 0;
 
-    const handleMove = (moveEvent) => {
-      const clientX = moveEvent.clientX || (moveEvent.touches && moveEvent.touches[0].clientX);
-      const clientY = moveEvent.clientY || (moveEvent.touches && moveEvent.touches[0].clientY);
-      const dx = clientX - startX;
-      const dy = clientY - startY;
+    const handleMove = (moveEvent: MouseEvent | TouchEvent) => {
+      const moveClientX = 'touches' in moveEvent ? moveEvent.touches[0].clientX : moveEvent.clientX;
+      const moveClientY = 'touches' in moveEvent ? moveEvent.touches[0].clientY : moveEvent.clientY;
+      const dx = moveClientX - startX;
+      const dy = moveClientY - startY;
 
       let nextX = initialX + dx;
       let nextY = initialY + dy;
 
-      // 【はみ出し防止機能】
-      const rect = cardRef.current.getBoundingClientRect();
-      const maxX = window.innerWidth - rect.width - 10; // 右端の限界（スクロールバー考慮）
-      const maxY = document.documentElement.scrollHeight - rect.height; // 下端の限界
-
-      if (nextX < 0) nextX = 0;
-      if (nextX > maxX && maxX > 0) nextX = maxX;
-      if (nextY < 0) nextY = 0;
-      if (nextY > maxY && maxY > 0) nextY = maxY;
-
       if (cardRef.current) {
+        const rect = cardRef.current.getBoundingClientRect();
+        const maxX = window.innerWidth - rect.width - 10;
+        const maxY = document.documentElement.scrollHeight - rect.height;
+
+        if (nextX < 0) nextX = 0;
+        if (nextX > maxX && maxX > 0) nextX = maxX;
+        if (nextY < 0) nextY = 0;
+        if (nextY > maxY && maxY > 0) nextY = maxY;
+
         cardRef.current.style.left = `${nextX}px`;
         cardRef.current.style.top = `${nextY}px`;
       }
     };
 
-    const handleEnd = (upEvent) => {
-      const clientX = upEvent.clientX || (upEvent.changedTouches && upEvent.changedTouches[0].clientX) || startX;
-      const clientY = upEvent.clientY || (upEvent.changedTouches && upEvent.changedTouches[0].clientY) || startY;
-      let nextX = initialX + (clientX - startX);
-      let nextY = initialY + (clientY - startY);
+    const handleEnd = (upEvent: MouseEvent | TouchEvent) => {
+      const upClientX = 'changedTouches' in upEvent ? upEvent.changedTouches[0].clientX : (upEvent as MouseEvent).clientX ?? startX;
+      const upClientY = 'changedTouches' in upEvent ? upEvent.changedTouches[0].clientY : (upEvent as MouseEvent).clientY ?? startY;
+      let nextX = initialX + (upClientX - startX);
+      let nextY = initialY + (upClientY - startY);
 
-      const rect = cardRef.current.getBoundingClientRect();
-      const maxX = window.innerWidth - rect.width - 10;
-      const maxY = document.documentElement.scrollHeight - rect.height;
+      if (cardRef.current) {
+        const rect = cardRef.current.getBoundingClientRect();
+        const maxX = window.innerWidth - rect.width - 10;
+        const maxY = document.documentElement.scrollHeight - rect.height;
 
-      if (nextX < 0) nextX = 0;
-      if (nextX > maxX && maxX > 0) nextX = maxX;
-      if (nextY < 0) nextY = 0;
-      if (nextY > maxY && maxY > 0) nextY = maxY;
+        if (nextX < 0) nextX = 0;
+        if (nextX > maxX && maxX > 0) nextX = maxX;
+        if (nextY < 0) nextY = 0;
+        if (nextY > maxY && maxY > 0) nextY = maxY;
+      }
 
       onUpdate(macro.id, { x: nextX, y: nextY });
 
@@ -156,10 +181,12 @@ const MacroCard = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, 
           const style = document.createElement('style');
           style.textContent = cssRules;
           pipWindow.document.head.appendChild(style);
-        } catch (e) {
+        } catch {
           const link = document.createElement('link');
           link.rel = 'stylesheet';
-          link.href = styleSheet.href;
+          if (styleSheet.href) {
+            link.href = styleSheet.href;
+          }
           pipWindow.document.head.appendChild(link);
         }
       });
@@ -188,7 +215,7 @@ const MacroCard = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, 
       pre.style.fontSize = `${zoom}px`;
       pre.style.letterSpacing = '0.02em';
 
-      const getHighlightedHTML = (text) => {
+      const getHighlightedHTML = (text: string) => {
         if (!highlightPattern) return text;
         const parts = text.split(highlightPattern);
         return parts.map(part => {
@@ -203,24 +230,40 @@ const MacroCard = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, 
       container.appendChild(contentWrapper);
       pipWindow.document.body.appendChild(container);
 
-      const slider = pipWindow.document.getElementById('pip-zoom');
-      slider.addEventListener('input', (e) => {
-        const newSize = parseInt(e.target.value, 10);
+      const slider = pipWindow.document.getElementById('pip-zoom') as HTMLInputElement | null;
+      const handleSliderInput = (e: Event) => {
+        const target = e.target as HTMLInputElement;
+        const newSize = parseInt(target.value, 10);
         pre.style.fontSize = `${newSize}px`;
         setZoom(newSize);
-      });
-      contentWrapper.addEventListener('wheel', (e) => {
+      };
+
+      const handleWheel = (e: WheelEvent) => {
         if (e.ctrlKey) {
           e.preventDefault();
           const delta = e.deltaY > 0 ? -1 : 1;
           const currentSize = parseInt(pre.style.fontSize, 10) || 13;
           const nextSize = Math.max(10, Math.min(40, currentSize + delta));
           pre.style.fontSize = `${nextSize}px`;
-          slider.value = nextSize;
+          if (slider) slider.value = nextSize.toString();
           setZoom(nextSize);
         }
-      }, { passive: false });
-    } catch (err) {
+      };
+
+      if (slider) {
+        slider.addEventListener('input', handleSliderInput);
+      }
+      contentWrapper.addEventListener('wheel', handleWheel, { passive: false });
+
+      const handleClose = () => {
+        if (slider) {
+          slider.removeEventListener('input', handleSliderInput);
+        }
+        contentWrapper.removeEventListener('wheel', handleWheel);
+        pipWindow.removeEventListener('pagehide', handleClose);
+      };
+      pipWindow.addEventListener('pagehide', handleClose);
+    } catch {
       showToast("プレビュー環境ではPiPを利用できません。独立したタブで実行してください。");
     }
   };
@@ -289,66 +332,66 @@ const MacroCard = React.memo(({ macro, highlightPattern, sortedRules, onUpdate, 
     </div>
   );
 });
+MacroCard.displayName = 'MacroCard';
 
-// アプリ本体コンポーネント
 export default function App() {
-  const [macros, setMacros] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ff14_macros');
-      return saved ? JSON.parse(saved).map((m, i) => ({ ...m, x: m.x ?? (40 + (i * 30)), y: m.y ?? (40 + (i * 30)), zIndex: m.zIndex ?? (10 + i) })) : INITIAL_MACROS;
-    } catch (e) {
-      return INITIAL_MACROS;
-    }
-  });
+  const [initialData] = useState(() => loadStoredData(INITIAL_MACROS, INITIAL_RULES));
+  const [macros, setMacros] = useState<Macro[]>(initialData.macros);
+  const [rules, setRules] = useState<HighlightRule[]>(initialData.rules);
 
-  const [rules, setRules] = useState(() => {
-    try {
-      const saved = localStorage.getItem('ff14_rules');
-      return saved ? JSON.parse(saved) : INITIAL_RULES;
-    } catch (e) {
-      return INITIAL_RULES;
-    }
-  });
+  const [zIndexCounter, setZIndexCounter] = useState<number>(100);
+  const [editingMacro, setEditingMacro] = useState<DraftMacro | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [toast, setToast] = useState<string | null>(null);
+  const [draftMacro, setDraftMacro] = useState<DraftMacro>({ title: '', content: '' });
+  const [newRuleKeyword, setNewRuleKeyword] = useState<string>('');
+  const [newRuleColor, setNewRuleColor] = useState<string>(PRESET_COLORS[7]);
 
-  const [zIndexCounter, setZIndexCounter] = useState(100);
-  const [editingMacro, setEditingMacro] = useState(null);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [toast, setToast] = useState(null);
-  const [draftMacro, setDraftMacro] = useState({ title: '', content: '' });
-  const [newRuleKeyword, setNewRuleKeyword] = useState('');
-  const [newRuleColor, setNewRuleColor] = useState(PRESET_COLORS[7]);
+  useEffect(() => {
+    saveStoredData(macros, rules);
+  }, [macros, rules]);
 
-  // ローカルストレージ自動保存
-  useEffect(() => { localStorage.setItem('ff14_macros', JSON.stringify(macros)); }, [macros]);
-  useEffect(() => { localStorage.setItem('ff14_rules', JSON.stringify(rules)); }, [rules]);
-
-  // パターン生成を最適化
   const { sortedRules, highlightPattern } = useMemo(() => {
     const sorted = [...rules].sort((a, b) => b.keyword.length - a.keyword.length);
     const patternStr = sorted.map(r => r.keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
     return { sortedRules: sorted, highlightPattern: patternStr ? new RegExp(`(${patternStr})`, 'g') : null };
   }, [rules]);
 
-  // 各種アクションの最適化（再レンダリング防止）
-  const showToast = useCallback((message) => {
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showToast = useCallback((message: string) => {
+    if (toastTimerRef.current) {
+      clearTimeout(toastTimerRef.current);
+    }
     setToast(message);
-    setTimeout(() => setToast(null), 4000);
+    toastTimerRef.current = setTimeout(() => {
+      setToast(null);
+      toastTimerRef.current = null;
+    }, 4000);
   }, []);
 
-  const updateMacro = useCallback((id, updates) => {
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const updateMacro = useCallback((id: string, updates: Partial<Macro>) => {
     setMacros(prev => prev.map(m => m.id === id ? { ...m, ...updates } : m));
   }, []);
 
-  const deleteMacro = useCallback((id) => {
+  const deleteMacro = useCallback((id: string) => {
     setMacros(prev => prev.filter(m => m.id !== id));
   }, []);
 
-  const editMacro = useCallback((macro) => {
+  const editMacro = useCallback((macro: Macro) => {
     setDraftMacro(macro);
     setEditingMacro(macro);
   }, []);
 
-  const bringToFront = useCallback((id) => {
+  const bringToFront = useCallback((id: string) => {
     setZIndexCounter(prev => {
       const next = prev + 1;
       setMacros(macrosPrev => macrosPrev.map(m => m.id === id ? { ...m, zIndex: next } : m));
@@ -362,7 +405,7 @@ export default function App() {
     } else {
       const offset = macros.length * 30;
       const newZ = zIndexCounter + 1;
-      setMacros([...macros, { id: Date.now().toString(), x: 40 + offset, y: 40 + offset, zIndex: newZ, ...draftMacro }]);
+      setMacros([...macros, { id: Date.now().toString(), x: 40 + offset, y: 40 + offset, zIndex: newZ, title: draftMacro.title, content: draftMacro.content }]);
       setZIndexCounter(newZ);
     }
     setEditingMacro(null);
@@ -382,7 +425,7 @@ export default function App() {
           <button onClick={() => setIsSettingsOpen(true)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 border border-slate-700 transition-colors shadow-lg">
             <Settings size={20} />
           </button>
-          <button onClick={() => { setDraftMacro({ title: '', content: '' }); setEditingMacro({}); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold flex items-center gap-1 transition-colors shadow-lg shadow-blue-900/50">
+          <button onClick={() => { setDraftMacro({ title: '', content: '' }); setEditingMacro({ title: '', content: '' }); }} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg font-bold flex items-center gap-1 transition-colors shadow-lg shadow-blue-900/50">
             <Plus size={18} /> 新規マクロ
           </button>
         </div>
